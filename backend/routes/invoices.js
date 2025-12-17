@@ -1,6 +1,7 @@
 // routes/invoiceRoutes.js
 import express from "express";
 import Invoice from "../models/Invoice.js";
+import transporter from "../utils/mailer.js";
 
 const router = express.Router();
 
@@ -9,7 +10,6 @@ router.post("/", async (req, res) => {
   try {
     const { customer, email, amount, status, date } = req.body;
 
-    // Basic validation
     if (!customer || !email || !amount) {
       return res.status(400).json({
         success: false,
@@ -17,31 +17,28 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // Generate unique invoice ID
     let invoiceId;
     let exists = true;
 
-    // Retry if random ID already exists (rare)
     while (exists) {
       invoiceId = `INV-${Math.floor(1000 + Math.random() * 9000)}`;
       exists = await Invoice.exists({ id: invoiceId });
     }
 
-    // Prepare invoice data safely
     const invoiceData = {
       id: invoiceId,
       customer: customer.trim(),
       email: email.trim(),
       amount: Number(amount),
       status: status || "Pending",
-      date: date && date.trim() !== "" && !isNaN(new Date(date))
-        ? new Date(date)
-        : Date.now(),
+      date:
+        date && date.trim() !== "" && !isNaN(new Date(date))
+          ? new Date(date)
+          : Date.now(),
     };
 
-    // Create and save invoice
     const invoice = await Invoice.create(invoiceData);
-    console.log("✅ Invoice saved to DB:", invoice);
+    console.log("✅ Invoice saved:", invoice.id);
 
     res.status(201).json({
       success: true,
@@ -51,12 +48,10 @@ router.post("/", async (req, res) => {
   } catch (error) {
     console.error("❌ Invoice Save Error:", error);
 
-    // Duplicate ID error
     if (error.code === 11000) {
       return res.status(409).json({
         success: false,
         message: "Duplicate invoice ID. Please try again.",
-        error: error.message,
       });
     }
 
@@ -78,6 +73,55 @@ router.get("/", async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch invoices",
+      error: error.message,
+    });
+  }
+});
+
+// -------------------- SEND INVOICE EMAIL --------------------
+router.post("/send/:id", async (req, res) => {
+  try {
+    const invoice = await Invoice.findOne({ id: req.params.id });
+
+    if (!invoice) {
+      return res.status(404).json({
+        success: false,
+        message: "Invoice not found",
+      });
+    }
+
+    const mailOptions = {
+      from: `NovHawk Billing <${process.env.EMAIL_USER}>`,
+      to: invoice.email,
+      subject: `Invoice ${invoice.id}`,
+      html: `
+        <h2>Invoice Details</h2>
+        <p><strong>Invoice ID:</strong> ${invoice.id}</p>
+        <p><strong>Customer:</strong> ${invoice.customer}</p>
+        <p><strong>Amount:</strong> ₹${invoice.amount}</p>
+        <p><strong>Status:</strong> ${invoice.status}</p>
+        <p><strong>Date:</strong> ${new Date(
+          invoice.date
+        ).toDateString()}</p>
+        <br/>
+        <p>Thank you for choosing <b>NovHawk Billing</b>.</p>
+      `,
+    };
+
+    await transporter.sendMail(mailOptions);
+
+    console.log("📧 Invoice email sent:", invoice.id);
+
+    res.json({
+      success: true,
+      message: `Invoice ${invoice.id} sent successfully`,
+    });
+  } catch (error) {
+    console.error("❌ Email Send Error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to send invoice email",
       error: error.message,
     });
   }
